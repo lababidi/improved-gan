@@ -1,9 +1,7 @@
 import tensorflow as tf
-from model import sigmoid_kl_with_logits
-from ops import variables_on_gpu0
-from ops import avg_grads
-from model import read_and_decode_with_labels
-from model import get_vars
+from .model import sigmoid_kl_with_logits, read_and_decode_with_labels, get_vars
+from .ops import variables_on_gpu0, avg_grads
+
 IMSIZE = 128
 filename = '/media/NAS_SHARED/imagenet/imagenet_train_labeled_' + str(IMSIZE) + '.tfrecords'
 
@@ -30,31 +28,32 @@ def build_model(self):
     self.d_optim = d_opt.apply_gradients(avg_d_grads)
     self.g_optim = g_opt.apply_gradients(avg_g_grads)
 
+
 def build_model_single_gpu(self, gpu_idx):
     assert not self.y_dim
 
     if gpu_idx == 0:
-        filename_queue = tf.train.string_input_producer([filename]) #  num_epochs=self.config.epoch)
+        filename_queue = tf.train.string_input_producer([filename])  # num_epochs=self.config.epoch)
         self.get_image, self.get_label = read_and_decode_with_labels(filename_queue)
 
         with tf.variable_scope("misc"):
-            chance = 1. # TODO: declare this down below and make it 1. - 1. / num_classes
+            chance = 1.  # TODO: declare this down below and make it 1. - 1. / num_classes
             avg_error_rate = tf.get_variable('avg_error_rate', [],
-                    initializer=tf.constant_initializer(0.),
-                    trainable=False)
+                                             initializer=tf.constant_initializer(0.),
+                                             trainable=False)
             num_error_rate = tf.get_variable('num_error_rate', [],
-                    initializer=tf.constant_initializer(0.),
-                    trainable=False)
+                                             initializer=tf.constant_initializer(0.),
+                                             trainable=False)
 
     images, sparse_labels = tf.train.shuffle_batch([self.get_image, self.get_label],
-                    batch_size=self.batch_size,
-                    num_threads=2,
-                    capacity=1000 + 3 * self.batch_size,
-                    min_after_dequeue=1000,
-                    name='real_images_and_labels')
+                                                   batch_size=self.batch_size,
+                                                   num_threads=2,
+                                                   capacity=1000 + 3 * self.batch_size,
+                                                   min_after_dequeue=1000,
+                                                   name='real_images_and_labels')
     if gpu_idx == 0:
-        self.sample_images= tf.placeholder(tf.float32, [self.sample_size] + self.image_shape,
-                                        name='sample_images')
+        self.sample_images = tf.placeholder(tf.float32, [self.sample_size] + self.image_shape,
+                                            name='sample_images')
         self.sample_labels = tf.placeholder(tf.int32, [self.sample_size], name="sample_labels")
 
         self.reference_G, self.reference_zs = self.generator(is_ref=True)
@@ -71,14 +70,16 @@ def build_model_single_gpu(self, gpu_idx):
         G = tf.Print(G, [tf.reduce_mean(G_means), tf.reduce_mean(G_vars)], "generator mean and average var", first_n=1)
         image_means = tf.reduce_mean(images, 0, keep_dims=True)
         image_vars = tf.reduce_mean(tf.square(images - image_means), 0, keep_dims=True)
-        images = tf.Print(images, [tf.reduce_mean(image_means), tf.reduce_mean(image_vars)], "image mean and average var", first_n=1)
+        images = tf.Print(images, [tf.reduce_mean(image_means), tf.reduce_mean(image_vars)],
+                          "image mean and average var", first_n=1)
         self.Gs = []
         self.zses = []
     self.Gs.append(G)
     self.zses.append(zs)
 
     joint = tf.concat(0, [images, G])
-    class_logits, D_on_data, D_on_data_logits, D_on_G, D_on_G_logits = self.discriminator(joint, reuse=True, prefix="joint ")
+    class_logits, D_on_data, D_on_data_logits, D_on_G, D_on_G_logits = self.discriminator(joint, reuse=True,
+                                                                                          prefix="joint ")
     # D_on_G_logits = tf.Print(D_on_G_logits, [D_on_G_logits], "D_on_G_logits")
 
     self.d_sum = tf.histogram_summary("d", D_on_data)
@@ -89,7 +90,7 @@ def build_model_single_gpu(self, gpu_idx):
     d_loss_real = sigmoid_kl_with_logits(D_on_data_logits, 1. - d_label_smooth)
     class_loss_weight = 1.
     d_loss_class = class_loss_weight * tf.nn.sparse_softmax_cross_entropy_with_logits(class_logits,
-            tf.to_int64(sparse_labels))
+                                                                                      tf.to_int64(sparse_labels))
     error_rate = 1. - tf.reduce_mean(tf.to_float(tf.nn.in_top_k(class_logits, sparse_labels, 1)))
     # self.d_loss_class = tf.Print(self.d_loss_class, [error_rate], "gpu " + str(gpu_idx) + " current minibatch error rate")
     if gpu_idx == 0:
@@ -101,7 +102,7 @@ def build_model_single_gpu(self, gpu_idx):
         update = tf.assign(avg_error_rate, (1. - tc) * avg_error_rate + tc * error_rate)
         with tf.control_dependencies([update]):
             d_loss_class = tf.Print(d_loss_class,
-                [avg_error_rate], "running top-1 error rate")
+                                    [avg_error_rate], "running top-1 error rate")
     # Do not smooth the negative targets.
     # If we use positive targets of alpha and negative targets of beta,
     # then the optimal discriminator function is D(x) = (alpha p_data(x) + beta p_generator(x)) / (p_data(x) + p_generator(x)).
@@ -110,7 +111,7 @@ def build_model_single_gpu(self, gpu_idx):
     # Note that using this one-sided label smoothing also shifts the equilibrium
     # value to alpha/2.
     d_loss_fake = tf.nn.sigmoid_cross_entropy_with_logits(D_on_G_logits,
-            tf.zeros_like(D_on_G_logits))
+                                                          tf.zeros_like(D_on_G_logits))
     g_loss = sigmoid_kl_with_logits(D_on_G_logits, self.generator_target_prob)
     d_loss_class = tf.reduce_mean(d_loss_class)
     d_loss_real = tf.reduce_mean(d_loss_real)
